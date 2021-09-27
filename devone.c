@@ -12,8 +12,10 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 #define DRIVER_NAME "devone"
 
-static unsigned int devone_major = 0;
+static int devone_devs = 2; /* device count */
+static unsigned int devone_major = 0; /* dynamic allocation */
 module_param(devone_major, uint, 0);
+static struct cdev devone_cdev;
 
 static int devone_open(struct inode *inode, struct file *file)
 {
@@ -43,33 +45,40 @@ struct file_operations devone_fops = {
 
 static int devone_init(void)
 {
+    dev_t dev = MKDEV(devone_major, 0);
+    int alloc_ret = 0;
     int major;
-    int ret = 0;
+    int cdev_err = 0;
 
-    major = register_chrdev(devone_major, DRIVER_NAME, &devone_fops);
-    if ((devone_major > 0 && major != 0) ||
-        (devone_major == 0 && major < 0) ||
-        (major < 0)){
+    alloc_ret = alloc_chrdev_region(&dev, 0, devone_devs, DRIVER_NAME);
+    if (alloc_ret) goto error;
+    devone_major = major = MAJOR(dev);
 
-        printk("%s driver registration error\n", DRIVER_NAME);
-        ret = major;
-        goto error;  
-    }
-    if (devone_major == 0) { /* dynamic allocation */
-        devone_major = major;
-    }
+    cdev_init(&devone_cdev, &devone_fops);
+    devone_cdev.owner = THIS_MODULE;
 
-    printk("%s driver(major %d) installed.\n", DRIVER_NAME, devone_major);
+    cdev_err = cdev_add(&devone_cdev, MKDEV(devone_major, 0), devone_devs);
+    if (cdev_err) goto error;
+
+    printk(KERN_ALERT "%s driver(major %d) installed.\n", DRIVER_NAME, major);
+
+    return 0;
 
 error:
-    return (ret);
+    if (cdev_err == 0) cdev_del(&devone_cdev);
+
+    if (alloc_ret == 0) unregister_chrdev_region(dev, devone_devs);
+
+    return -1;
 }
 
 static void devone_exit(void)
 {
-    unregister_chrdev(devone_major, DRIVER_NAME);
+    dev_t dev = MKDEV(devone_major, 0);
 
-    printk("%s driver removed.\n", DRIVER_NAME);
+    cdev_del(&devone_cdev);
+    unregister_chrdev_region(dev, devone_devs);
+    printk(KERN_ALERT "%s driver removed.\n", DRIVER_NAME);
 }
 
 module_init(devone_init);
