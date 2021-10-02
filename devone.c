@@ -6,6 +6,7 @@
 #include <linux/cdev.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/device.h>
 #include <asm/current.h>
 #include <asm/uaccess.h>
 
@@ -14,52 +15,18 @@ MODULE_LICENSE("Dual BSD/GPL");
 #define DRIVER_NAME "devone"
 
 static int devone_devs = 1; /* device count */
-static unsigned int devone_major = 0; /* dynamic allocation */
-module_param(devone_major, uint, 0);
+static int devone_major = 0; /* dynamic allocation */
+static int devone_minor = 0; /* static allocation */
 static struct cdev devone_cdev;
-
-struct devone_data {
-    unsigned char val;
-    rwlock_t lock;
-};
-
-
-ssize_t devone_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
-{
-    struct devone_data *p = filp->private_data;
-    unsigned char val;
-    int retval = 0;
-
-    printk("%s: count %d pos %lld\n", __func__, count, *f_pos);
-
-    if (count  >= 1) {
-        if (copy_from_user(&val, &buf[0], 1)){
-            retval = -EFAULT;
-            goto out;
-        }
-        printk("%02x ", val);
-
-        write_lock(&p->lock);
-        p->val = val;
-        write_unlock(&p->lock);
-        retval = count;
-    }
-out:
-    return (retval);
-}
-
+static struct class *devone_class = NULL;
+static dev_t devone_dev;
 
 ssize_t devone_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
-    struct devone_data *p = filp->private_data;
     int i;
-    unsigned char val;
+    unsigned char val = 0xff;
     int retval;
 
-    read_lock(&p->lock);
-    val = p->val;
-    read_unlock(&p->lock);
-    
     printk("%s: count %d pos %lld\n", __func__, count, *f_pos);
     
     for (i = 0; i < count; i++){
@@ -74,43 +41,8 @@ out:
     return (retval);
 }
 
-
-static int devone_open(struct inode *inode, struct file *file)
-{
-    struct devone_data *p;
-
-    printk("%s: major %d minor %d (pid %d)\n", __func__, imajor(inode), iminor(inode), current->pid);
-
-    p = kmalloc(sizeof(struct devone_data), GFP_KERNEL);
-    if (p == NULL){
-        printk("%s: no memory allocated\n", __func__);
-        return -ENOMEM;
-    }
-
-    p->val = 0xff;
-    rwlock_init(&p->lock);
-    file->private_data = p;
-    
-    return 0;
-}
-
-static int devone_close(struct inode *inode, struct file *file)
-{
-    printk("%s: major %d minor %d (pid %d)\n", __func__, imajor(inode), iminor(inode), current->pid);
-    
-    if (file->private_data){
-        kfree(file->private_data);
-        file->private_data = NULL;
-    }
-
-    return 0;
-}
-
 struct file_operations devone_fops = {
-    .open = devone_open,
-    .release = devone_close,
     .read = devone_read,
-    .write = devone_write,
 };
 
 static int devone_init(void)
@@ -119,6 +51,7 @@ static int devone_init(void)
     int alloc_ret = 0;
     int major;
     int cdev_err = 0;
+    struct device *class_dev = NULL;
 
     alloc_ret = alloc_chrdev_region(&dev, 0, devone_devs, DRIVER_NAME);
     if (alloc_ret) goto error;
@@ -126,11 +59,25 @@ static int devone_init(void)
 
     cdev_init(&devone_cdev, &devone_fops);
     devone_cdev.owner = THIS_MODULE;
-
-    cdev_err = cdev_add(&devone_cdev, MKDEV(devone_major, 0), devone_devs);
+    devone_cdev.ops = &devone_fops;
+    cdev_err = cdev_add(&devone_cdev, MKDEV(devone_major, devone_minor), 1);
     if (cdev_err) goto error;
 
-    printk(KERN_ALERT "%s driver(major %d) installed.\n", DRIVER_NAME, major);
+    /* register class */
+    devone_class = class_create(THIS_MODULE, "devone");
+    if (IS_ERR(devone_class)) {
+        goto error;
+    }
+    devone_dev = MKDEV(devone_major, devone_minor);
+    class_dev = device_create(     
+        devone_class,
+        NULL,
+        devone_dev,
+        NULL,
+        "devone%d",
+        devone_minor);
+
+    printk(KERN_ALERT "devone driver(major %d) installed.\n", major);
 
     return 0;
 
@@ -146,9 +93,14 @@ static void devone_exit(void)
 {
     dev_t dev = MKDEV(devone_major, 0);
 
+    /* unregister class */
+    device_destroy(devone_class, devone_dev);
+    class_destroy(devone_class);
+
     cdev_del(&devone_cdev);
     unregister_chrdev_region(dev, devone_devs);
-    printk(KERN_ALERT "%s driver removed.\n", DRIVER_NAME);
+
+    printk(KERN_ALERT "devone driver removed.\n");
 }
 
 module_init(devone_init);
