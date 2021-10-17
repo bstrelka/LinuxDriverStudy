@@ -7,73 +7,81 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/ioctl.h>
+#include "devone_ioctl.h"
 
-#define DEVFILE "/dev/devone"
+#define DEVFILE "/dev/devone0"
 
-int open_file(char *filename)
+void read_buffer(int fd)
 {
-    int fd;
-
-    fd = open(filename, O_RDWR);
-    if (fd == -1){
-        perror("open");
-    }
-    return (fd);
-}
-
-void close_file(int fd)
-{
-    if (close(fd) != 0){
-        perror("close");
-    }
-}
-
-void read_file(int fd)
-{
-    unsigned char buf[8], *p;
-    ssize_t ret;
+    unsigned char buf[64];
+    int ret;
+    int i;
 
     ret = read(fd, buf, sizeof(buf));
-    if (ret > 0) {
-        p = buf;
-        while (ret--) printf("%02x ", *p++);
-    }else{
+    if (ret == -1) {
         perror("read");
     }
-
-    printf("\n");
-}
-
-void write_file(int fd, unsigned char val)
-{
-    ssize_t ret;
-
-    ret = write(fd, &val, 1);
-    if (ret <= 0) {
-        perror("write");
+    for (i = 0; i < ret; i++){
+        printf("%02x ", buf[i]);
     }
+    printf("\n");
 }
 
 int main(void)
 {
+    struct ioctl_cmd cmd;
+    int ret;
     int fd;
-    int i;
 
-    for (i = 0; i < 2; i++){
-        printf("No. %d\n", i + 1);
-
-        fd = open_file(DEVFILE);
-
-        read_file(fd);
-
-        write_file(fd, 0x00);
-        read_file(fd);
-
-        write_file(fd, 0xc0);
-        read_file(fd);
-
-        close_file(fd);
+    fd = open(DEVFILE, O_RDWR);
+    if (fd == -1){
+        perror("open");
+        printf("cannnot allocate memory\n");
+        exit(1);
     }
-    
+
+    printf("Test1 Read 1byte from the driver module(IOCTL_VALGET)\n");
+    memset(&cmd, 0, sizeof(cmd));
+    ret = ioctl(fd, IOCTL_VALGET, &cmd);
+    if (ret == -1) {
+        printf("IOCTL_VALGET1 error %d\n", errno);
+        perror("ioctl");
+    }
+    printf("val Expect:255 Returned Value:%d\n\n", cmd.val);
+
+    // read buffer
+    printf("Test2 Read 64bytes from the driver module(devone_read)\n");
+    printf("Expect:all 0xFF\n");
+    read_buffer(fd);
+    printf("\n");
+
+    printf("Write 0xCC to the driver module(IOCTL_VALSET)\n");
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.val = 0xCC;
+    ret = ioctl(fd, IOCTL_VALSET, &cmd);
+    if (ret == -1){
+        printf("IOCTL_VALSET errno %d\n", errno);
+        perror("ioctl");
+    }
+    printf("\n");
+
+    printf("Test3 Read 1byte from the driver module(IOCTL_VALGET)\n");
+    memset(&cmd, 0, sizeof(cmd));
+    ret = ioctl(fd, IOCTL_VALGET, &cmd);
+    if (ret == -1){
+        printf("IOCTL_VALGET2 errno %d\n", errno);
+        perror("ioctl");
+    }
+    printf("val Expect:204 Returned Value:%d\n\n", cmd.val);
+
+    // read buffer
+    printf("Test4 Read 64bytes from the driver module(devone_read)\n");
+    printf("Expect:all 0xCC\n");
+    read_buffer(fd);
+    printf("\n");
+
+    close(fd);
+
     return 0;
 }
